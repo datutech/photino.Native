@@ -11,8 +11,11 @@
 #include <windows.h>
 #include <algorithm>
 #include <limits>
+#include <dwmapi.h>
 #include <WebView2EnvironmentOptions.h>
 
+
+#pragma comment( lib, "dwmapi" )
 #pragma comment(lib, "Urlmon.lib")
 #pragma warning(disable: 4996)		//disable warning about wcscpy vs. wcscpy_s
 
@@ -213,6 +216,7 @@ Photino::Photino(PhotinoInitParams* initParams)
 		initParams->Height = GetSystemMetrics(SM_CYSCREEN);
 	}
 
+	SetChromeless(initParams->Chromeless);
 	if (initParams->Chromeless)
 	{
 		//CW_USEDEFAULT CAN NOT BE USED ON POPUP WINDOWS
@@ -229,11 +233,17 @@ Photino::Photino(PhotinoInitParams* initParams)
 	if (initParams->Width < initParams->MinWidth) initParams->Width = initParams->MinWidth;
 
 	//Create the window
+	// For chromeless/frameless/borderless window, we need to use WS_CAPTION and maybe other flags to acheive 
+	// shadowing, dragging, minimize and maximize animation 
+	// By adding WS_MINIMIZEBOX | WS_MAXIMIZEBOX we can minimize and restore window by clicking desktop taskbar button
+	DWORD style = initParams->Chromeless || initParams->FullScreen ? 
+		WS_POPUP | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX :
+		WS_OVERLAPPEDWINDOW;
 	_hWnd = CreateWindowEx(
 		0, //WS_EX_OVERLAPPEDWINDOW, //An optional extended window style.
 		CLASS_NAME,             //Window class
 		initParams->TitleWide,		//Window text
-		initParams->Chromeless || initParams->FullScreen ? WS_POPUP : WS_OVERLAPPEDWINDOW,	//Window style
+		style,	//Window style
 
 		// Size and position
 		initParams->Left, initParams->Top, initParams->Width, initParams->Height,
@@ -243,7 +253,7 @@ Photino::Photino(PhotinoInitParams* initParams)
 		_hInstance, //Instance handle
 		this        //Additional application data
 	);
-	hwndToPhotino[_hWnd] = this;
+	//hwndToPhotino[_hWnd] = this;
 
 	if (initParams->WindowIconFileWide != NULL && initParams->WindowIconFileWide != L"")
 		Photino::SetIconFile(initParams->WindowIconFileWide);
@@ -287,6 +297,61 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg)
 	{
+	case WM_NCCREATE:
+	{
+		// This should be the first message received when invoking CreateWindowEx() 
+		// https://stackoverflow.com/questions/1741296/windows-api-what-is-the-first-message-a-window-is-guaranteed-to-receive
+		// We could received the params of CreateWindowEx() from lParam
+		// https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-nccreate
+		CREATESTRUCT* createStruct = (CREATESTRUCT*)lParam;
+		assert(createStruct != nullptr);
+		Photino* photino = (Photino*)(createStruct->lpCreateParams);
+		assert(photino != nullptr);
+		// TODO: check if we need a lock to protect hwndToPhotino when we using multiple windows
+		hwndToPhotino[hwnd] = photino;
+		bool chromeless = false;
+		photino->GetChromeless(&chromeless);
+		if (chromeless)
+		{
+			// This plays together with WM_NCALCSIZE.
+			MARGINS m{ 0, 0, 0, 1 };
+			DwmExtendFrameIntoClientArea(hwnd, &m);
+			// Force the system to recalculate NC area (making it send WM_NCCALCSIZE).
+			SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+				SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+			return TRUE;
+		}
+		break;
+	}
+	case WM_NCCALCSIZE:
+	{
+		Photino* photino = hwndToPhotino[hwnd];
+		assert(photino != nullptr);
+		bool chromeless = false;
+		photino->GetChromeless(&chromeless);
+		if (chromeless)
+		{
+			if (wParam == TRUE)
+			{
+				SetWindowLong(hwnd, DWLP_MSGRESULT, 0);
+				return TRUE;
+			}
+			return FALSE;
+		}
+		break;
+	}
+	case WM_NCHITTEST:
+	{
+		// We could NOT receive this event in WebView2 because it is intercepted and not exposed in any APIs
+		// So we can not laverage this event to implement customized resizing and dragging the window with WS_POPUP
+		// Instead we should use app-region: drag CSS style provided by WebView2 for draggable region
+		// with frameless/borderless/chromeless window (with WS_POPUP style)
+		// https://github.com/MicrosoftEdge/WebView2Feedback/issues/2243
+		// As for resizing, it seems that WebView2 does not provide a workable solution right now.
+		// We can implement it by using SendMessage(hwnd, WM_SYSCOMMAND, 0xF001 ~ 0xF009, 0)
+		// https://stackoverflow.com/questions/763239/custom-form-designer-move-resize-controls-using-winapi
+		break;
+	}
 	case WM_CREATE: 
 	{
 		EnableDarkMode(hwnd, true);
@@ -1095,4 +1160,14 @@ void Photino::Show()
 		else
 			exit(0);
 	}
+}
+
+void Photino::GetChromeless(bool* chromeless)
+{
+	*chromeless = _chromeless;
+}
+
+void Photino::SetChromeless(bool chromeless)
+{
+	_chromeless = chromeless;
 }

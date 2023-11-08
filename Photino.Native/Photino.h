@@ -162,6 +162,7 @@ private:
 	wil::com_ptr<ICoreWebView2Environment> _webviewEnvironment;
 	wil::com_ptr<ICoreWebView2> _webviewWindow;
 	wil::com_ptr<ICoreWebView2Controller> _webviewController;
+	bool _chromeless;
 	bool EnsureWebViewIsInstalled();
 	bool InstallWebView2();
 	void AttachWebView();
@@ -209,6 +210,8 @@ public:
 	HWND getHwnd();
 	void RefitContent();
 	void FocusWebView2();
+	void GetChromeless(bool* chromeless);
+	void SetChromeless(bool chromeless);
 	int _minWidth;
 	int _minHeight;
 	int _maxWidth;
